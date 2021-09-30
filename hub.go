@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
+	"github.com/kenyaachon/drawingboard/message"
 	"github.com/tidwall/gjson"
 )
 

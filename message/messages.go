@@ -28,7 +28,7 @@ type Connected struct {
 	Color string `json:"color"`
 	Users []User `json:"users"`
 }
-func NewConnect(color string, users []User) *Connected {
+func NewConnected(color string, users []User) *Connected {
 	return &Connected{
 		Kind: KindConnected,
 		Color: color,

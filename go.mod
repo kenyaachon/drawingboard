@@ -1,4 +1,4 @@
-module drawingboard
+module github.com/kenyaachon/drawingboard
 
 go 1.17
 
