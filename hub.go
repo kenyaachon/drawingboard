@@ -1,3 +1,133 @@
+// package main
+
+// import (
+// 	"encoding/json"
+// 	"log"
+// 	"net/http"
+
+// 	"github.com/gorilla/websocket"
+// 	"github.com/kenyaachon/drawingboard/message"
+// 	"github.com/tidwall/gjson"
+// )
+
+// type Hub struct {
+// 	clients []*Client
+// 	register chan *Client
+// 	unregister chan *Client
+// }
+
+// func newHub() *Hub {
+// 	return &Hub{
+// 		clients: make([]*Client, 0),
+// 		register: make(chan *Client),
+// 		unregister: make(chan *Client),
+// 	}
+// }
+
+// func (hub *Hub) run() {
+// 	for {
+// 		select {
+// 		case client := <-hub.register:
+// 			hub.onConnect(client)
+// 		case client := <-hub.unregister:
+// 			hub.onDisconnect(client)
+// 		}
+// 	}
+// }
+
+// var upgrader = websocket.Upgrader{
+// 	//Allow all origins
+// 	CheckOrigin: func(r *http.Request) bool {return true},
+// }
+
+// //HTTP handler to upgrade the HTTP.Request to a WebSockets request
+// func (hub *Hub) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+// 	socket, err := upgrader.Upgrade(w, r, nil)
+// 	if err != nil {
+// 		log.Println(err)
+// 		http.Error(w, "could not upgrade", http.StatusInternalServerError)
+// 		return
+// 	}
+
+// 	client := newClient(hub, socket)
+// 	hub.clients = append(hub.clients, client)
+// 	hub.register <- client
+// 	client.run()
+// }
+
+// //sends a message to a client
+// func (hub *Hub) send(message interface{}, client *Client) {
+// 	data, _ := json.Marshal(message)
+// 	client.outbound <- data
+// }
+
+// //broadcasts a message to all clients, except one
+// func (hub *Hub) broadcast(message interface{}, ignore *Client) {
+// 	data, _ := json.Marshal(message)
+// 	for _, c := range hub.clients {
+// 		if c != ignore {
+// 			c.outbound <- data
+// 		}
+// 	}
+// }
+
+// //When a client connects.
+// //Its sends user's color and information about other users to the client
+// //It also notifies others that someone joined
+// func (hub *Hub) onConnect(client *Client) {
+// 	log.Println("client connected: ", client.socket.RemoteAddr())
+// 	// Make list of all users
+// 	users := []message.User{}
+// 	for _, c := range hub.clients {
+// 		users = append(users, message.User{ID: c.id, Color: c.color})
+// 	}
+
+// 	//Notify user joined
+// 	hub.send(message.NewConnected(client.color, users), client)
+// 	hub.broadcast(message.NewUserJoined(client.id, client.color), client)
+
+// }
+
+// func (hub *Hub) onDisconnect(client *Client) {
+// 	log.Println("client disconnected: ", client.socket.RemoteAddr())
+// 	client.close()
+
+// 	//Find index of client
+// 	i := -1
+// 	for j, c := range hub.clients {
+// 		if c.id == client.id {
+// 			i = j
+// 			break
+// 		}
+// 	}
+
+// 	//Delete client from list
+// 	copy(hub.clients[i:], hub.clients[i+1:])
+// 	hub.clients[len(hub.clients) - 1] = nil
+// 	hub.clients = hub.clients[:len(hub.clients)-1]
+// 	//Notify user left
+// 	hub.broadcast(message.NewUserLeft(client.id), nil)
+// }
+
+// func (hub *Hub) onMessage(data []byte, client *Client) {
+// 	kind := gjson.GetBytes(data, "kind").Int()
+// 	if kind == message.KindStroke {
+// 		var msg message.Stroke
+// 		if json.Unmarshal(data, &msg) != nil {
+// 			return
+// 		}
+// 		msg.UserID = client.id
+// 		hub.broadcast(msg, client)
+// 	}else if kind == message.KindClear {
+// 		var msg message.Clear
+// 		if json.Unmarshal(data, &msg) != nil {
+// 			return
+// 		}
+// 		msg.UserID = client.id
+// 		hub.broadcast(msg, client)
+// 	}
+// }
+
 package main
 
 import (
@@ -10,16 +140,22 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
+
 type Hub struct {
-	clients []*Client
-	register chan *Client
+	clients    []*Client
+	nextID     int
+	register   chan *Client
 	unregister chan *Client
 }
 
 func newHub() *Hub {
 	return &Hub{
-		clients: make([]*Client, 0),
-		register: make(chan *Client),
+		clients:    make([]*Client, 0),
+		nextID:     0,
+		register:   make(chan *Client),
 		unregister: make(chan *Client),
 	}
 }
@@ -35,33 +171,6 @@ func (hub *Hub) run() {
 	}
 }
 
-var upgrader = websocket.Upgrader{
-	//Allow all origins
-	CheckOrigin: func(r *http.Request) bool {return true},
-}
-
-//HTTP handler to upgrade the HTTP.Request to a WebSockets request
-func (hub *Hub) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	socket, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println(err)
-		http.Error(w, "could not upgrade", http.StatusInternalServerError)
-		return
-	}
-
-	client := newClient(hub, socket)
-	hub.clients = append(hub.clients, client)
-	hub.register <- client
-	client.run()
-}
-
-//sends a message to a client
-func (hub *Hub) send(message interface{}, client *Client) {
-	data, _ := json.Marshal(message)
-	client.outbound <- data
-}
-
-//broadcasts a message to all clients, except one
 func (hub *Hub) broadcast(message interface{}, ignore *Client) {
 	data, _ := json.Marshal(message)
 	for _, c := range hub.clients {
@@ -71,30 +180,51 @@ func (hub *Hub) broadcast(message interface{}, ignore *Client) {
 	}
 }
 
+func (hub *Hub) send(message interface{}, client *Client) {
+	data, _ := json.Marshal(message)
+	client.outbound <- data
+}
 
-//When a client connects. 
-//Its sends user's color and information about other users to the client
-//It also notifies others that someone joined
+func (hub *Hub) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	socket, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		log.Println(err)
+		http.Error(w, "could not upgrade", http.StatusInternalServerError)
+		return
+	}
+	client := newClient(hub, socket)
+	hub.register <- client
+
+	go client.read()
+	go client.write()
+}
+
 func (hub *Hub) onConnect(client *Client) {
 	log.Println("client connected: ", client.socket.RemoteAddr())
+
+	// Make new client
+	client.id = hub.nextID
+	hub.nextID++
+	client.color = generateColor()
+	hub.clients = append(hub.clients, client)
+
 	// Make list of all users
 	users := []message.User{}
 	for _, c := range hub.clients {
 		users = append(users, message.User{ID: c.id, Color: c.color})
 	}
 
-	//Notify user joined
+	// Notify that a user joined
 	hub.send(message.NewConnected(client.color, users), client)
 	hub.broadcast(message.NewUserJoined(client.id, client.color), client)
-	
 }
-
 
 func (hub *Hub) onDisconnect(client *Client) {
 	log.Println("client disconnected: ", client.socket.RemoteAddr())
+
 	client.close()
 
-	//Find index of client
+	// Find index of client
 	i := -1
 	for j, c := range hub.clients {
 		if c.id == client.id {
@@ -102,16 +232,17 @@ func (hub *Hub) onDisconnect(client *Client) {
 			break
 		}
 	}
-
-	//Delete client from list
+	// Delete client from list
 	copy(hub.clients[i:], hub.clients[i+1:])
-	hub.clients[len(hub.clients) - 1] = nil
+	hub.clients[len(hub.clients)-1] = nil
 	hub.clients = hub.clients[:len(hub.clients)-1]
-	//Notify user left
+
 	hub.broadcast(message.NewUserLeft(client.id), nil)
 }
 
 func (hub *Hub) onMessage(data []byte, client *Client) {
+	log.Println("onMessage: ", string(data))
+
 	kind := gjson.GetBytes(data, "kind").Int()
 	if kind == message.KindStroke {
 		var msg message.Stroke
@@ -120,7 +251,7 @@ func (hub *Hub) onMessage(data []byte, client *Client) {
 		}
 		msg.UserID = client.id
 		hub.broadcast(msg, client)
-	}else if kind == message.KindClear {
+	} else if kind == message.KindClear {
 		var msg message.Clear
 		if json.Unmarshal(data, &msg) != nil {
 			return
